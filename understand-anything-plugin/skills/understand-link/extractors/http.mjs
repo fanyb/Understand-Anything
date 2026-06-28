@@ -10,15 +10,19 @@
  *     prefix / base path (from the manifest) so consumers' absolute URLs match.
  *     key = `VERB /normalized/path`.
  *
- *   consumes (v0.2): fe→backend HTTP calls. Two shapes (DESIGN.md §6.1):
+ *   consumes (v0.2): fe→backend HTTP calls. Two shapes (DESIGN.md §6.1, verified
+ *     against fe-backend-aurora):
  *     - `axios.get/post/put/delete/patch('/url', …)` — verb + path are explicit;
  *       detected in any fe file (.ts/.tsx/.js/.jsx/.vue).
- *     - service-module config objects `{ url: '/url', method: 'post' }` — only in
- *       files whose path looks like an API/service module (DESIGN.md: `src/service/
- *       modules/*`), where a bare `url:` is reliably a request; method defaults GET.
- *     fe URLs are matched against provider keys verbatim (they already include the
- *     gateway prefix the browser hits), so these are low-confidence (0.5) and miss
- *     gracefully into `unresolved` (R5) when the convention differs.
+ *     - service-module config objects `{ name, url: `${host}/path`, method: 'post' }`
+ *       — the real aurora shape: arrays of request descriptors under `src/service/
+ *       modules/*`, where the URL is a template literal prefixed by a host var
+ *       (`${aurora}`, `${sale}`, …) that names the target service. Only in files
+ *       whose path looks like an API/service module; method defaults GET.
+ *     The `${host}` prefix is resolved to the target's base path via the manifest's
+ *     per-fe-service `http.hostMap` ({ aurora: "/aurora" }) so the key matches the
+ *     provider's `VERB /aurora/...`. Unmapped hosts keep the bare path + a
+ *     `targetHint`, staying low-confidence (0.5) and missing into `unresolved` (R5).
  *
  * Pure module: `extract(files, ctx)` takes pre-read files + manifest http config.
  */
@@ -70,17 +74,57 @@ function urlPath(raw) {
 }
 
 /**
- * fe→backend HTTP consumes for one frontend file. Each call → an `http` consume
- * keyed `VERB /normalized/path` (low confidence; see module header).
+ * Resolve a fe URL (possibly a `${host}/path` template literal) to a route path.
+ * A leading `${host}` names the target service; it is replaced by the manifest's
+ * `hostMap[host]` base path so the key matches the provider's `VERB /base/...`.
+ * @returns {{path:string, targetHint?:string}}
  */
-export function extractFeConsumes(path, content) {
+function resolveUrl(raw, hostMap) {
+  const u = urlPath(raw);
+  const m = u.match(/^\$\{(\w+)\}(\/.*)?$/);
+  if (m) {
+    const host = m[1];
+    const rest = m[2] || '/';
+    const base = hostMap[host];
+    return base
+      ? { path: normalizePath([base, rest]), targetHint: host }
+      : { path: normalizePath([rest]), targetHint: host };
+  }
+  return { path: normalizePath([u]) };
+}
+
+/**
+ * The smallest `{ … }` object literal containing `fromIndex`, found by brace
+ * matching from the nearest preceding `{`. Brace matching (not first `}`) is
+ * required because a `${host}` template URL carries a balanced `}` of its own.
+ */
+function objectScope(content, fromIndex) {
+  const open = content.lastIndexOf('{', fromIndex);
+  if (open < 0) return content;
+  let depth = 0;
+  for (let i = open; i < content.length; i++) {
+    if (content[i] === '{') depth++;
+    else if (content[i] === '}' && --depth === 0) return content.slice(open, i + 1);
+  }
+  return content.slice(open);
+}
+
+/**
+ * fe→backend HTTP consumes for one frontend file. Each call → an `http` consume
+ * keyed `VERB /normalized/path` (low confidence; see module header). `hostMap`
+ * resolves `${host}` URL prefixes to target base paths (DESIGN.md §6.1).
+ */
+export function extractFeConsumes(path, content, hostMap = {}) {
   const nodeId = `file:${path}`;
   const byKey = new Map(); // dedupe identical calls within a file
 
   const add = (verb, raw, evidence) => {
-    const key = `${verb} ${normalizePath([urlPath(raw)])}`;
+    const { path: routePath, targetHint } = resolveUrl(raw, hostMap);
+    const key = `${verb} ${routePath}`;
     if (byKey.has(key)) return;
-    byKey.set(key, { kind: 'http', key, nodeId, confidence: 0.5, evidence });
+    const row = { kind: 'http', key, nodeId, confidence: 0.5, evidence };
+    if (targetHint) row.targetHint = targetHint;
+    byKey.set(key, row);
   };
 
   // axios.<verb>('/url', …) — explicit verb + path, any fe file.
@@ -90,15 +134,14 @@ export function extractFeConsumes(path, content) {
     add(m[1].toUpperCase(), m[2], `axios.${m[1].toLowerCase()}('${m[2]}')`);
   }
 
-  // { url: '/url', method: 'post' } — service-module config objects only. `method`
-  // is read from the SAME object literal (between the enclosing braces) so an
-  // adjacent object's method can't leak in; absent → GET.
+  // { url: `${host}/url`, method: 'post' } — service-module config objects only.
+  // `method` is read from the SAME object literal so an adjacent object's method
+  // can't leak in; absent → GET. The object boundary is found by brace matching
+  // (not first `}`) because a `${host}` URL contains a `}` of its own.
   if (isServiceModule(path)) {
     const urlRe = /\burl\s*:\s*[`'"]([^`'"]+)[`'"]/g;
     while ((m = urlRe.exec(content))) {
-      const open = content.lastIndexOf('{', m.index);
-      const close = content.indexOf('}', m.index);
-      const scope = content.slice(open >= 0 ? open : 0, close >= 0 ? close : content.length);
+      const scope = objectScope(content, m.index);
       const mm = scope.match(/\bmethod\s*:\s*[`'"]?(get|post|put|delete|patch)[`'"]?/i);
       const verb = mm ? mm[1].toUpperCase() : 'GET';
       add(verb, m[1], `service module { url: '${m[1]}', method: '${verb.toLowerCase()}' }`);
@@ -127,7 +170,7 @@ function methodToRoute(annotations) {
 
 /**
  * @param {Array<{path:string, content:string}>} files
- * @param {{serviceId:string, domains?:string[], http?:{basePath?:string, gatewayPrefix?:string}}} ctx
+ * @param {{serviceId:string, domains?:string[], http?:{basePath?:string, gatewayPrefix?:string, hostMap?:Record<string,string>}}} ctx
  * @returns {{provides:Array, consumes:Array}}
  */
 export function extract(files, ctx = {}) {
@@ -136,11 +179,12 @@ export function extract(files, ctx = {}) {
   const domain = soleDomain(ctx.domains);
   const gatewayPrefix = ctx.http?.gatewayPrefix || '';
   const basePath = ctx.http?.basePath || '';
+  const hostMap = ctx.http?.hostMap || {};
 
   for (const { path, content } of files) {
     // fe→backend consumers (axios / service modules) live in frontend files.
     if (isFeFile(path)) {
-      consumes.push(...extractFeConsumes(path, content));
+      consumes.push(...extractFeConsumes(path, content, hostMap));
       continue;
     }
     if (!path.endsWith('.java')) continue;

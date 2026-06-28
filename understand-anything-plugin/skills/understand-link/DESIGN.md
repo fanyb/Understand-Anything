@@ -255,10 +255,12 @@ skills/understand-link/
 | ⑥ | 消费形态 | **Dashboard 总览视图 + agent MCP**，两者都做 | §12：v0.1 出合规 system-graph；dashboard 跨图跳转 & MCP 列 v1 |
 | ⑦ | 范围/LLM | **先走 v0.1 纯确定性骨架**，模糊残差只列 `unresolved`、不投 LLM | §14：v0.1 零 LLM |
 
-### 仍需后续确认（不阻塞 v0.1）
-- **MQ topic 来源**：`AbstractRocketMqHandler` 子类与 `MqSendService.send(...)` 的 topic 具体写在哪（`getTopic()` 覆写 / 常量 / Apollo 配置）——确认后 MQ 适配器才能确定性提取。
-- **fe service 模块的请求约定**：fe→backend HTTP 的 URL 实际写法（非字面量 `url:`），决定 HTTP Consumer 适配器能否做、置信度多少。
-- **manifest 字段定稿**：网关前缀/基路径的具体格式（每服务一条 or 全局规则 + 覆写）。
+### 已核对（实测 aurora 源码，v0.2 落地）
+- **MQ topic 来源 → 确认为 Apollo 配置，源码内不存在**：`AbstractRocketMqHandler` 只有 `handleMessage(MessageExt)`，**无 `getTopic()`**；handler↔topic 绑定全在 Apollo（`mq.rocket-mq.handlerConfig` = tag→handler FQN、`consumeTopics`）。生产者 `MqSendService` 用具名方法 + `@Value("${mq.rocket-mq.producerTopic_*}")` 占位符，topic 值同样在 Apollo。
+  → **结论**：源码侧只能确定性拿到「生产者 `@Value` 属性 key」与「消费者 handler FQN」；真实 topic 值由使用者在 manifest `mq.topics.byProp` / `mq.topics.byHandler` 提供（与"网关前缀由使用者提供"同性质，决策①）。提取器保留字面量/`getTopic()` 兜底以兼容其它服务；无映射时落 `topic:?` / `topicProp:KEY` 进 unresolved（R5），绝不猜。LLM 兜模糊残差留 v0.3。
+- **fe service 模块请求约定 → 确认为高度规整**：`src/service/modules/*.js` 是 `{ name, url: `${host}/path`, method }` 描述符数组；`${host}`（`aurora`×161 / `sale` / `fourA` …，destructure 自 `process.env.API_HOST_LIST`）直接点名目标服务。
+  → **结论**：HTTP Consumer 适配器可做。提取器剥掉 `${host}`，用 manifest 每个 fe 服务的 `http.hostMap`（`{aurora:"/aurora"}`）重建为 `VERB /aurora/path` 与后端 provider key 对齐；未映射的 host 保留裸路径 + `targetHint`，落 unresolved。置信度 0.5。
+- **manifest 字段**：网关前缀/基路径为每服务一条（`http.basePath` / `http.gatewayPrefix`），已定稿；本次新增 `http.hostMap`、`mq.topics`。
 
 ## 14. 里程碑建议
 

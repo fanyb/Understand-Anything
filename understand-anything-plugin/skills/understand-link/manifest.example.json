@@ -9,7 +9,17 @@
       "graphRef": "../aurora/aurora-service/.understand-anything/knowledge-graph.json",
       "domainRef": "../aurora/aurora-service/.understand-anything/domain-graph.json",
       "http": { "basePath": "/aurora", "gatewayPrefix": "" },
-      "mq": { "consumerBaseClass": "AbstractRocketMqHandler", "producerClass": "MqSendService" },
+      "mq": {
+        "consumerBaseClass": "AbstractRocketMqHandler",
+        "producerClass": "MqSendService",
+        "topics": {
+          "byProp": { "mq.rocket-mq.producerTopic_dispatchAnalysisNoticed": "DISPATCH_ANALYSIS_NOTICED" },
+          "byHandler": {
+            "com.hk.simba.pre.mq.consumer.PreDispatchAnalysisNoticedHandler": "DISPATCH_ANALYSIS_NOTICED",
+            "com.hk.simba.aurora.mq.ServiceWorkOrderDesignatedHandler": "WORKORDER_DESIGNATED"
+          }
+        }
+      },
       "protocols": { "dubbo": true, "http": true, "mq": true }
     },
     {
@@ -27,6 +37,7 @@
       "root": "../aurora/aurora-web",
       "graphRef": "../aurora/aurora-web/.understand-anything/knowledge-graph.json",
       "domainRef": "../aurora/aurora-web/.understand-anything/domain-graph.json",
+      "http": { "hostMap": { "aurora": "/aurora", "workorder": "/workorder" } },
       "protocols": { "dubbo": false, "http": true, "mq": false }
     },
     {
@@ -36,6 +47,11 @@
       "graphRef": "../workorder/workorder-service/.understand-anything/knowledge-graph.json",
       "domainRef": "../workorder/workorder-service/.understand-anything/domain-graph.json",
       "http": { "basePath": "/workorder", "gatewayPrefix": "" },
+      "mq": {
+        "topics": {
+          "byProp": { "mq.rocket-mq.producerTopic_workOrderDesignated": "WORKORDER_DESIGNATED" }
+        }
+      },
       "protocols": { "dubbo": true, "http": true, "mq": true }
     }
   ]

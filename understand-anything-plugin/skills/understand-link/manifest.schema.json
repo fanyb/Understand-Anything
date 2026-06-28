@@ -64,12 +64,17 @@
             "gatewayPrefix": {
               "type": "string",
               "description": "Gateway prefix prepended ahead of basePath, e.g. a sisyphus gateway route prefix."
+            },
+            "hostMap": {
+              "type": "object",
+              "description": "For frontend services: maps the host variable used in `url: `${host}/path`` (destructured from process.env.API_HOST_LIST) to the target service's base path, e.g. { \"aurora\": \"/aurora\" }. Used to reconstruct the absolute route so fe consumer keys match backend provider keys (DESIGN.md §6.1). Unmapped hosts keep the bare path and fall to unresolved.",
+              "additionalProperties": { "type": "string" }
             }
           }
         },
         "mq": {
           "type": "object",
-          "description": "MQ extractor config for self-wrapped RocketMQ (DESIGN.md §6.1). Override only when a service names its base/send classes differently.",
+          "description": "MQ extractor config for self-wrapped RocketMQ (DESIGN.md §6.1). Override only when a service names its base/send classes differently, or supply topic values the static scan cannot infer.",
           "additionalProperties": false,
           "properties": {
             "consumerBaseClass": {
@@ -79,6 +84,23 @@
             "producerClass": {
               "type": "string",
               "description": "Simple name of the MQ send service whose .send(topic, …) marks a producer. Default \"MqSendService\"."
+            },
+            "topics": {
+              "type": "object",
+              "description": "Apollo/config-sourced topic values the Java source does not contain (DESIGN.md §13, verified against aurora-service). The user supplies the mapping, mirroring how the HTTP gateway prefix is hand-provided.",
+              "additionalProperties": false,
+              "properties": {
+                "byProp": {
+                  "type": "object",
+                  "description": "Producer side: `@Value(\"${KEY}\")` property key → real topic name, e.g. { \"mq.rocket-mq.producerTopic_dispatchAnalysisNoticed\": \"DISPATCH_ANALYSIS_NOTICED\" }.",
+                  "additionalProperties": { "type": "string" }
+                },
+                "byHandler": {
+                  "type": "object",
+                  "description": "Consumer side: handler class FQN → real topic name, e.g. { \"com.hk.simba.pre.mq.consumer.PreDispatchAnalysisNoticedHandler\": \"DISPATCH_ANALYSIS_NOTICED\" }.",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
             }
           }
         },

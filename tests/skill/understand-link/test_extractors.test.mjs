@@ -172,6 +172,19 @@ describe('http fe→backend consumer extractor', () => {
     expect(out).toEqual([]);
   });
 
+  it('resolves `${host}/path` via hostMap (real aurora shape); unmapped host keeps bare path + targetHint', () => {
+    const content = `const { aurora, sale } = process.env.API_HOST_LIST
+const list = [
+  { name: 'A', url: \`\${aurora}/commonWhiteList/list\`, method: 'POST', withCredentials: true },
+  { name: 'B', url: \`\${sale}/order/detail\`, method: 'GET' },
+]`;
+    const out = http.extractFeConsumes('src/service/modules/whiteList.js', content, { aurora: '/aurora' });
+    const a = out.find((c) => c.key.includes('commonWhiteList'));
+    expect(a.key).toBe('POST /aurora/commonWhiteList/list'); // ${aurora} → /aurora, method from same object
+    const b = out.find((c) => c.targetHint === 'sale');
+    expect(b).toMatchObject({ key: 'GET /order/detail', targetHint: 'sale' }); // unmapped → bare path + hint
+  });
+
   it('integration: http.extract routes fe files to consumes, leaves provides empty', () => {
     const out = http.extract([{ path: 'src/api/user.ts', content: `axios.get('/user/me')` }], { http: {} });
     expect(out.provides).toEqual([]);
@@ -269,6 +282,80 @@ public class H extends BaseMq { public String getTopic(){ return "T"; } }`,
       {},
     );
     expect(out.provides).toEqual([]);
+  });
+
+  // --- real aurora shape: topic is Apollo-config-sourced, supplied via manifest ---
+  it('producer @Value("${...topic...}") in MqSendService resolves via mq.topics.byProp', () => {
+    const file = {
+      path: 'src/main/java/com/hk/simba/pre/mq/producer/MqSendService.java',
+      content: `package com.hk.simba.pre.mq.producer;
+@Service
+public class MqSendService {
+  @Value("\${mq.rocket-mq.producerTopic_dispatchAnalysisNoticed}")
+  private String producerTopicDispatchAnalysisNoticed;
+  @Value("\${mq.rocket-mq.producerTag_dispatchAnalysisNoticed_pre_dispatch}")
+  private String producerTag;
+}`,
+    };
+    const out = mq.extract([file], {
+      domains: ['派单'],
+      mq: { topics: { byProp: { 'mq.rocket-mq.producerTopic_dispatchAnalysisNoticed': 'DISPATCH_ANALYSIS_NOTICED' } } },
+    });
+    // the tag @Value is excluded; only the topic prop is emitted, resolved via config
+    expect(out.provides).toHaveLength(1);
+    expect(out.provides[0]).toMatchObject({
+      kind: 'mq', key: 'topic:DISPATCH_ANALYSIS_NOTICED', role: 'producer', via: 'config', domain: '派单', confidence: 0.85,
+    });
+  });
+
+  it('producer topic prop without a manifest mapping surfaces as topicProp:KEY (R5)', () => {
+    const file = {
+      path: 'MqSendService.java',
+      content: `package p;
+public class MqSendService {
+  @Value("\${mq.rocket-mq.producerTopic_x}")
+  private String t;
+}`,
+    };
+    const out = mq.extract([file], {}); // no mq.topics
+    expect(out.provides).toEqual([
+      expect.objectContaining({ key: 'topicProp:mq.rocket-mq.producerTopic_x', unresolvedTopic: true, confidence: 0.3 }),
+    ]);
+  });
+
+  it('consumer handler FQN resolves via mq.topics.byHandler', () => {
+    const file = {
+      path: 'src/main/java/com/hk/simba/aurora/mq/ServiceWorkOrderDesignatedHandler.java',
+      content: `package com.hk.simba.aurora.mq;
+import org.apache.rocketmq.common.message.MessageExt;
+@Service
+public class ServiceWorkOrderDesignatedHandler extends AbstractRocketMqHandler {
+  @Override public boolean handleMessage(MessageExt m) { return true; }
+}`,
+    };
+    const out = mq.extract([file], {
+      mq: { topics: { byHandler: { 'com.hk.simba.aurora.mq.ServiceWorkOrderDesignatedHandler': 'WORKORDER_DESIGNATED' } } },
+    });
+    expect(out.consumes).toHaveLength(1);
+    expect(out.consumes[0]).toMatchObject({
+      kind: 'mq', key: 'topic:WORKORDER_DESIGNATED', role: 'consumer', via: 'config', confidence: 0.85,
+    });
+  });
+
+  it('consumer with no getTopic() and no mapping surfaces topic:? with handlerFqn (real aurora)', () => {
+    const file = {
+      path: 'NoticeUserTaskCompleteHandler.java',
+      content: `package com.hk.simba.aurora.mq;
+import org.apache.rocketmq.common.message.MessageExt;
+public class NoticeUserTaskCompleteHandler extends AbstractRocketMqHandler {
+  @Override public boolean handleMessage(MessageExt m) { return true; }
+}`,
+    };
+    const out = mq.extract([file], {});
+    expect(out.consumes[0]).toMatchObject({
+      key: 'topic:?', unresolvedTopic: true, confidence: 0.3,
+      handlerFqn: 'com.hk.simba.aurora.mq.NoticeUserTaskCompleteHandler',
+    });
   });
 });
 
