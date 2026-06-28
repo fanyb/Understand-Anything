@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "registry": { "backend": "json" },
+  "services": [
+    {
+      "serviceId": "aurora-service",
+      "repo": "aurora",
+      "root": "../aurora/aurora-service",
+      "graphRef": "../aurora/aurora-service/.understand-anything/knowledge-graph.json",
+      "domainRef": "../aurora/aurora-service/.understand-anything/domain-graph.json",
+      "http": { "basePath": "/aurora", "gatewayPrefix": "" },
+      "protocols": { "dubbo": true, "http": true }
+    },
+    {
+      "serviceId": "backend-aurora",
+      "repo": "aurora",
+      "root": "../aurora/backend-aurora",
+      "graphRef": "../aurora/backend-aurora/.understand-anything/knowledge-graph.json",
+      "domainRef": "../aurora/backend-aurora/.understand-anything/domain-graph.json",
+      "http": { "basePath": "/backend-aurora", "gatewayPrefix": "" },
+      "protocols": { "dubbo": true, "http": true }
+    },
+    {
+      "serviceId": "workorder-service",
+      "repo": "workorder",
+      "root": "../workorder/workorder-service",
+      "graphRef": "../workorder/workorder-service/.understand-anything/knowledge-graph.json",
+      "domainRef": "../workorder/workorder-service/.understand-anything/domain-graph.json",
+      "http": { "basePath": "/workorder", "gatewayPrefix": "" },
+      "protocols": { "dubbo": true, "http": true }
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://understand-anything/understand-link/manifest.schema.json",
+  "title": "understand-link manifest",
+  "description": "Hand-maintained service inventory for cross-service graph linking (DESIGN.md §13 decision ①). The single entry point: lists every service, where its subgraphs live, and the HTTP normalization context the extractor cannot infer.",
+  "type": "object",
+  "required": ["services"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string", "description": "Manifest schema version." },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["json", "sqlite"],
+          "default": "json",
+          "description": "Registry backend. v0.1 implements json only; sqlite is reserved for v0.3."
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/service" }
+    }
+  },
+  "definitions": {
+    "service": {
+      "type": "object",
+      "required": ["serviceId", "graphRef", "domainRef"],
+      "additionalProperties": false,
+      "properties": {
+        "serviceId": {
+          "type": "string",
+          "description": "Stable unique id for the service (used as the node id in the system graph)."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name / label. Defaults to serviceId."
+        },
+        "root": {
+          "type": "string",
+          "description": "Path to the service source root to scan for .java files. Relative paths resolve against the manifest's directory. Defaults to repo or '.'."
+        },
+        "graphRef": {
+          "type": "string",
+          "description": "Path to the service's knowledge-graph.json (hard prerequisite — run /understand). Relative to the manifest's directory."
+        },
+        "domainRef": {
+          "type": "string",
+          "description": "Path to the service's domain-graph.json (hard prerequisite — run /understand-domain). Relative to the manifest's directory."
+        },
+        "http": {
+          "type": "object",
+          "description": "HTTP route normalization context the static scan cannot infer (DESIGN.md §6 / §13 decision ①).",
+          "additionalProperties": false,
+          "properties": {
+            "basePath": {
+              "type": "string",
+              "description": "Service base path prepended to controller routes, e.g. \"/aurora\"."
+            },
+            "gatewayPrefix": {
+              "type": "string",
+              "description": "Gateway prefix prepended ahead of basePath, e.g. a sisyphus gateway route prefix."
+            }
+          }
+        },
+        "protocols": {
+          "type": "object",
+          "description": "Per-protocol extraction switches. Omitted protocols default to enabled for dubbo/http. v0.1 supports dubbo + http; mq is v0.2.",
+          "additionalProperties": false,
+          "properties": {
+            "dubbo": { "type": "boolean", "default": true },
+            "http": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    }
+  }
+}
