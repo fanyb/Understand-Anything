@@ -32,9 +32,11 @@ rationale (federated two-tier + boundary registry, DESIGN.md §4).
     `mq.producerClass`) for services that wrap RocketMQ under different names.
 - **Incremental diff** — `diff-cross-edges.mjs` reports cross-edges added/removed
   between runs (DESIGN.md §14); see Phase 4b.
-- **Deferred (by design, DESIGN.md §14):** SQLite registry backend → v0.3; LLM
-  residual matching (raw-URL / config-sourced topics) → v0.3; dashboard cross-graph
-  drill-down + agent MCP → v1.
+- **Registry backend** — `json` (default, git-diffable) or `sqlite` (real
+  `node:sqlite` file for scale / SQL access), selected by manifest
+  `registry.backend`. Both yield identical cross-edges (DESIGN.md §5.2).
+- **Deferred (by design, DESIGN.md §14):** LLM residual matching (raw-URL /
+  config-sourced topics) → v0.3; dashboard cross-graph drill-down + agent MCP → v1.
 
 All phases are deterministic Node scripts — no subagents, no LLM.
 
@@ -129,8 +131,14 @@ node "$SKILL_DIR/extract-boundaries.mjs" \
 
 ## Phase 3 — Build the registry (DESIGN.md §11.2)
 
+The backend is the manifest's `registry.backend` (`json` default, `sqlite`
+optional — DESIGN.md §5.2 / decision ⑤). For `sqlite`, pass `--backend=sqlite`
+and a `.db` path; both backends yield identical cross-edges.
+
 ```bash
-node "$SKILL_DIR/build-registry.mjs" "$LINK_DIR/boundaries" "$LINK_DIR/registry.json"
+BACKEND=$(node -e 'try{const m=require(process.argv[1]);process.stdout.write((m.registry&&m.registry.backend)||"json")}catch{process.stdout.write("json")}' "$MANIFEST")
+REGISTRY="$LINK_DIR/registry.json"; [ "$BACKEND" = "sqlite" ] && REGISTRY="$LINK_DIR/registry.db"
+node "$SKILL_DIR/build-registry.mjs" "$LINK_DIR/boundaries" "$REGISTRY" --backend="$BACKEND"
 ```
 
 ## Phase 4 — Resolve cross-service edges (DESIGN.md §11.3)
@@ -143,7 +151,7 @@ Before regenerating, snapshot the previous result so Phase 4b can diff it:
 ```bash
 CROSS="$LINK_DIR/intermediate/cross-edges.json"
 [ -f "$CROSS" ] && cp "$CROSS" "$LINK_DIR/intermediate/cross-edges.prev.json"
-node "$SKILL_DIR/resolve-cross-edges.mjs" "$LINK_DIR/registry.json" "$CROSS"
+node "$SKILL_DIR/resolve-cross-edges.mjs" "$REGISTRY" "$CROSS" --backend="$BACKEND"
 ```
 
 ## Phase 4b — Incremental diff (optional; DESIGN.md §14)

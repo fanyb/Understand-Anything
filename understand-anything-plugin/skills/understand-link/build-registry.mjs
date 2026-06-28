@@ -3,19 +3,20 @@
  * build-registry.mjs  —  Phase 2
  *
  * Upsert every boundary descriptor in <boundaries-dir> into the registry
- * (DESIGN.md §5.2). Goes through the json-store interface so the backend stays
- * swappable. Incremental: if <registry.json> already exists it is loaded and
- * each boundary is upserted (replacing that service's prior rows), so a run that
- * only re-extracted some services still produces a complete registry.
+ * (DESIGN.md §5.2). Goes through the registry backend interface (json default,
+ * sqlite optional) so the backend stays swappable. Incremental: the existing
+ * registry is loaded and each boundary is upserted (replacing that service's prior
+ * rows), so a run that only re-extracted some services still produces a complete
+ * registry.
  *
  * Usage:
- *   node build-registry.mjs <boundaries-dir> <registry.json>
+ *   node build-registry.mjs <boundaries-dir> <registry-path> [--backend=json|sqlite]
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyRegistry, upsertService } from './registry/json-store.mjs';
+import { getStore, emptyRegistry, upsertService } from './registry/index.mjs';
 
 /** Pure: fold an array of boundary descriptors into a registry document. */
 export function buildRegistry(boundaries, base) {
@@ -33,10 +34,13 @@ export function buildRegistry(boundaries, base) {
   return reg;
 }
 
-function main() {
-  const [, , boundariesDir, registryPath] = process.argv;
+async function main() {
+  const args = process.argv.slice(2);
+  const backendArg = args.find((a) => a.startsWith('--backend='));
+  const backend = backendArg ? backendArg.split('=')[1] : 'json';
+  const [boundariesDir, registryPath] = args.filter((a) => !a.startsWith('--'));
   if (!boundariesDir || !registryPath) {
-    process.stderr.write('Usage: node build-registry.mjs <boundaries-dir> <registry.json>\n');
+    process.stderr.write('Usage: node build-registry.mjs <boundaries-dir> <registry-path> [--backend=json|sqlite]\n');
     process.exit(1);
   }
 
@@ -45,14 +49,13 @@ function main() {
     : [];
   const boundaries = files.map((f) => JSON.parse(readFileSync(join(boundariesDir, f), 'utf-8')));
 
-  const base = existsSync(registryPath)
-    ? JSON.parse(readFileSync(registryPath, 'utf-8'))
-    : emptyRegistry();
+  const store = await getStore(backend);
+  const base = store.load(registryPath) || emptyRegistry();
 
   const reg = buildRegistry(boundaries, base);
-  writeFileSync(registryPath, JSON.stringify(reg, null, 2), 'utf-8');
+  store.save(registryPath, reg);
   process.stderr.write(
-    `Info: understand-link: registry has ${reg.services.length} services, ` +
+    `Info: understand-link: registry (${backend}) has ${reg.services.length} services, ` +
       `${reg.provides.length} provides, ${reg.consumes.length} consumes.\n`,
   );
 }
@@ -68,7 +71,7 @@ function isCliEntry() {
 
 if (isCliEntry()) {
   try {
-    main();
+    await main();
   } catch (err) {
     process.stderr.write(`build-registry.mjs failed: ${err.message}\n`);
     process.exit(1);

@@ -16,7 +16,7 @@
           "type": "string",
           "enum": ["json", "sqlite"],
           "default": "json",
-          "description": "Registry backend. v0.1 implements json only; sqlite is reserved for v0.3."
+          "description": "Registry backend (DESIGN.md §5.2 / decision ⑤). \"json\" (default): single git-diffable registry.json. \"sqlite\": a real SQLite file (via Node's built-in node:sqlite) for scale or to let an MCP/AI run SQL over the boundary index. Both produce identical cross-edges."
         }
       }
     },

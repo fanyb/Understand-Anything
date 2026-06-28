@@ -27,7 +27,7 @@
  * Pure module: `extract(files, ctx)` takes pre-read files + manifest http config.
  */
 
-import { scanJava, hasAnnotation, getAnnotation, firstStringArg } from './java-scan.mjs';
+import { scanJava, getAnnotation, firstStringArg } from './java-scan.mjs';
 
 export const kind = 'http';
 
