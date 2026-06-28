@@ -15,14 +15,26 @@ This skill **consumes** the output of `/understand` and `/understand-domain` —
 never re-analyzes a service. See `DESIGN.md` (next to this file) for the full
 rationale (federated two-tier + boundary registry, DESIGN.md §4).
 
-## Scope (v0.1 — deterministic skeleton, zero LLM)
+## Scope (v0.2 — deterministic, zero LLM)
 
-- **Extractors:** Dubbo (`@DubboService`+`implements` / `@DubboReference`) and
-  HTTP **provider** routes (Spring MVC `@*Mapping` normalized via the manifest's
-  gateway prefix / base path).
-- **Deferred (by design, DESIGN.md §14):** MQ adapter → v0.2; fe→backend HTTP
-  **consumer** → v0.2; SQLite registry backend → v0.3; LLM residual matching → v0.3;
-  dashboard cross-graph drill-down + agent MCP → v1.
+- **Extractors:**
+  - **Dubbo** — `@DubboService`+`implements` (provider) / `@DubboReference` (consumer).
+  - **HTTP** — Spring-MVC `@*Mapping` **provider** routes (normalized via the
+    manifest's gateway prefix / base path) **and** fe→backend **consumer** calls
+    (`axios.<verb>('/url')` in any frontend file; service-module `{ url, method }`
+    config objects under `src/service/modules/*`-style paths). fe consumers are
+    low-confidence (0.5) and miss gracefully into `unresolved`.
+  - **MQ** — self-wrapped RocketMQ: `MqSendService.send("TOPIC", …)` (producer) /
+    `extends AbstractRocketMqHandler` with `getTopic()`/`super(…)` (consumer).
+    Topics are resolved from string literals + in-file `final String` constants;
+    runtime/config-sourced topics surface as `topic:?` in `unresolved` (R5). Base /
+    send class names are per-service configurable (`mq.consumerBaseClass` /
+    `mq.producerClass`) for services that wrap RocketMQ under different names.
+- **Incremental diff** — `diff-cross-edges.mjs` reports cross-edges added/removed
+  between runs (DESIGN.md §14); see Phase 4b.
+- **Deferred (by design, DESIGN.md §14):** SQLite registry backend → v0.3; LLM
+  residual matching (raw-URL / config-sourced topics) → v0.3; dashboard cross-graph
+  drill-down + agent MCP → v1.
 
 All phases are deterministic Node scripts — no subagents, no LLM.
 
@@ -126,9 +138,23 @@ node "$SKILL_DIR/build-registry.mjs" "$LINK_DIR/boundaries" "$LINK_DIR/registry.
 `(kind,key)` hash join → cross edges + `unresolved` (consumers with no known
 provider — surfaced, never dropped, R5).
 
+Before regenerating, snapshot the previous result so Phase 4b can diff it:
+
 ```bash
-node "$SKILL_DIR/resolve-cross-edges.mjs" \
-  "$LINK_DIR/registry.json" "$LINK_DIR/intermediate/cross-edges.json"
+CROSS="$LINK_DIR/intermediate/cross-edges.json"
+[ -f "$CROSS" ] && cp "$CROSS" "$LINK_DIR/intermediate/cross-edges.prev.json"
+node "$SKILL_DIR/resolve-cross-edges.mjs" "$LINK_DIR/registry.json" "$CROSS"
+```
+
+## Phase 4b — Incremental diff (optional; DESIGN.md §14)
+
+On a re-run, report which cross-service edges appeared or disappeared since the
+last run (pairs naturally with `--changed`). Skip on the first run (no snapshot).
+
+```bash
+PREV="$LINK_DIR/intermediate/cross-edges.prev.json"
+[ -f "$PREV" ] && node "$SKILL_DIR/diff-cross-edges.mjs" \
+  "$PREV" "$LINK_DIR/intermediate/cross-edges.json" "$LINK_DIR/intermediate/cross-edges.diff.json"
 ```
 
 ## Phase 5 — Assemble the system graph (DESIGN.md §11.5)

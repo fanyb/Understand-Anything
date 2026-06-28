@@ -10,9 +10,15 @@
  *     prefix / base path (from the manifest) so consumers' absolute URLs match.
  *     key = `VERB /normalized/path`.
  *
- *   consumes (v0.1): NOT extracted. fe→backend (axios / service modules) and
- *     RestTemplate URL consumers are low-confidence and deferred to v0.2
- *     (see DESIGN.md §6.1 / §14). Returned as an empty array.
+ *   consumes (v0.2): fe→backend HTTP calls. Two shapes (DESIGN.md §6.1):
+ *     - `axios.get/post/put/delete/patch('/url', …)` — verb + path are explicit;
+ *       detected in any fe file (.ts/.tsx/.js/.jsx/.vue).
+ *     - service-module config objects `{ url: '/url', method: 'post' }` — only in
+ *       files whose path looks like an API/service module (DESIGN.md: `src/service/
+ *       modules/*`), where a bare `url:` is reliably a request; method defaults GET.
+ *     fe URLs are matched against provider keys verbatim (they already include the
+ *     gateway prefix the browser hits), so these are low-confidence (0.5) and miss
+ *     gracefully into `unresolved` (R5) when the convention differs.
  *
  * Pure module: `extract(files, ctx)` takes pre-read files + manifest http config.
  */
@@ -48,6 +54,60 @@ function parseRequestMethodVerb(raw) {
   return m ? m[1].toUpperCase() : null;
 }
 
+const FE_EXT_RE = /\.(ts|tsx|js|jsx|vue)$/;
+/** A frontend source file (excluding TypeScript declaration files). */
+function isFeFile(path) {
+  return FE_EXT_RE.test(path) && !path.endsWith('.d.ts');
+}
+/** Files where a bare `url:` is reliably a request config (service/api modules). */
+function isServiceModule(path) {
+  return /(?:^|\/)(?:service|services|api|apis|request|requests|http|modules)(?:\/|\.|$)/i.test(path);
+}
+
+/** Path part of a fe URL: drop query/hash, keep the route for key matching. */
+function urlPath(raw) {
+  return String(raw).split('?')[0].split('#')[0];
+}
+
+/**
+ * fe→backend HTTP consumes for one frontend file. Each call → an `http` consume
+ * keyed `VERB /normalized/path` (low confidence; see module header).
+ */
+export function extractFeConsumes(path, content) {
+  const nodeId = `file:${path}`;
+  const byKey = new Map(); // dedupe identical calls within a file
+
+  const add = (verb, raw, evidence) => {
+    const key = `${verb} ${normalizePath([urlPath(raw)])}`;
+    if (byKey.has(key)) return;
+    byKey.set(key, { kind: 'http', key, nodeId, confidence: 0.5, evidence });
+  };
+
+  // axios.<verb>('/url', …) — explicit verb + path, any fe file.
+  const axiosRe = /\baxios\s*\.\s*(get|post|put|delete|patch)\s*\(\s*[`'"]([^`'"]+)[`'"]/gi;
+  let m;
+  while ((m = axiosRe.exec(content))) {
+    add(m[1].toUpperCase(), m[2], `axios.${m[1].toLowerCase()}('${m[2]}')`);
+  }
+
+  // { url: '/url', method: 'post' } — service-module config objects only. `method`
+  // is read from the SAME object literal (between the enclosing braces) so an
+  // adjacent object's method can't leak in; absent → GET.
+  if (isServiceModule(path)) {
+    const urlRe = /\burl\s*:\s*[`'"]([^`'"]+)[`'"]/g;
+    while ((m = urlRe.exec(content))) {
+      const open = content.lastIndexOf('{', m.index);
+      const close = content.indexOf('}', m.index);
+      const scope = content.slice(open >= 0 ? open : 0, close >= 0 ? close : content.length);
+      const mm = scope.match(/\bmethod\s*:\s*[`'"]?(get|post|put|delete|patch)[`'"]?/i);
+      const verb = mm ? mm[1].toUpperCase() : 'GET';
+      add(verb, m[1], `service module { url: '${m[1]}', method: '${verb.toLowerCase()}' }`);
+    }
+  }
+
+  return [...byKey.values()];
+}
+
 /** Map a method's annotation buffer to a route, or null if none is a mapping. */
 function methodToRoute(annotations) {
   for (const a of annotations) {
@@ -72,12 +132,20 @@ function methodToRoute(annotations) {
  */
 export function extract(files, ctx = {}) {
   const provides = [];
-  const consumes = []; // deferred to v0.2
+  const consumes = [];
   const domain = soleDomain(ctx.domains);
   const gatewayPrefix = ctx.http?.gatewayPrefix || '';
   const basePath = ctx.http?.basePath || '';
 
   for (const { path, content } of files) {
+    // fe→backend consumers (axios / service modules) live in frontend files.
+    if (isFeFile(path)) {
+      consumes.push(...extractFeConsumes(path, content));
+      continue;
+    }
+    if (!path.endsWith('.java')) continue;
+
+    // Spring-MVC provider routes from Java controllers.
     const scan = scanJava(content);
     const nodeId = `file:${path}`;
 

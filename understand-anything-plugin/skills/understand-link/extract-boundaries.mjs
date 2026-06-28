@@ -14,7 +14,7 @@
  *
  * Extractors are plugins (extractors/<proto>.mjs), each exporting
  * `extract(files, ctx) → {provides, consumes}`. Adding a protocol = adding a file
- * (DESIGN.md §10). v0.1 ships dubbo + http; mq is v0.2.
+ * (DESIGN.md §10). v0.2 ships dubbo + http (incl. fe consumers) + mq.
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, realpathSync } from 'node:fs';
@@ -24,16 +24,21 @@ import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Protocol → extractor module. v0.1: dubbo + http (mq deferred to v0.2).
+// Protocol → extractor module. v0.2: dubbo + http (Java providers + fe consumers) + mq.
 const EXTRACTOR_MODULES = {
   dubbo: './extractors/dubbo.mjs',
   http: './extractors/http.mjs',
+  mq: './extractors/mq.mjs',
 };
 
 const SKIP_DIRS = new Set(['target', 'build', 'out', 'node_modules', '.git', '.idea', 'dist']);
 
-/** Recursively collect `.java` files under `root`, skipping build/vendor dirs. */
-function collectJavaFiles(root) {
+// Java (Dubbo/HTTP provider/MQ) + frontend (HTTP consumer) sources. Each extractor
+// filters to the extensions it understands.
+const SOURCE_EXT_RE = /\.(java|ts|tsx|js|jsx|vue)$/;
+
+/** Recursively collect source files under `root`, skipping build/vendor dirs. */
+function collectSourceFiles(root) {
   const out = [];
   const walk = (dir) => {
     let entries;
@@ -47,7 +52,7 @@ function collectJavaFiles(root) {
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name)) continue;
         walk(full);
-      } else if (e.isFile() && e.name.endsWith('.java')) {
+      } else if (e.isFile() && SOURCE_EXT_RE.test(e.name) && !e.name.endsWith('.d.ts')) {
         out.push(full);
       }
     }
@@ -91,7 +96,7 @@ async function loadExtractors(protocols) {
  * takes the resolved service config. Exported for tests.
  */
 export async function extractServiceBoundary(svc, extractors) {
-  const absFiles = collectJavaFiles(svc.root);
+  const absFiles = collectSourceFiles(svc.root);
   const files = [];
   const hasher = createHash('sha256');
   for (const abs of absFiles) {
@@ -107,7 +112,7 @@ export async function extractServiceBoundary(svc, extractors) {
   }
 
   const domains = readDomains(svc.domainRef);
-  const ctx = { serviceId: svc.serviceId, domains, http: svc.http || {} };
+  const ctx = { serviceId: svc.serviceId, domains, http: svc.http || {}, mq: svc.mq || {} };
 
   const provides = [];
   const consumes = [];

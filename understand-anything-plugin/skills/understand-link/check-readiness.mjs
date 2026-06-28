@@ -41,7 +41,7 @@ function tryReadJson(path) {
 
 /**
  * Pure: expand each manifest service into absolute paths + config.
- * @returns {Array<{serviceId, repo, root, graphRef, domainRef, http, protocols}>}
+ * @returns {Array<{serviceId, repo, root, graphRef, domainRef, http, mq, protocols}>}
  */
 export function resolveServicePaths(manifest, baseDir) {
   if (!manifest || !Array.isArray(manifest.services)) {
@@ -58,7 +58,8 @@ export function resolveServicePaths(manifest, baseDir) {
       graphRef: resolvePath(baseDir, svc.graphRef),
       domainRef: resolvePath(baseDir, svc.domainRef),
       http: svc.http || {},
-      protocols: svc.protocols || { dubbo: true, http: true },
+      mq: svc.mq || {},
+      protocols: svc.protocols || { dubbo: true, http: true, mq: true },
     };
   });
 }

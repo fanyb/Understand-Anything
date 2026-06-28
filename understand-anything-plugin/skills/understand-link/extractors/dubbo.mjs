@@ -36,6 +36,7 @@ export function extract(files, ctx = {}) {
   const domain = soleDomain(ctx.domains);
 
   for (const { path, content } of files) {
+    if (!path.endsWith('.java')) continue;
     const scan = scanJava(content);
     const nodeId = `file:${path}`;
 

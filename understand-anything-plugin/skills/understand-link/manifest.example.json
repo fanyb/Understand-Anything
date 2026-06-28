@@ -9,7 +9,8 @@
       "graphRef": "../aurora/aurora-service/.understand-anything/knowledge-graph.json",
       "domainRef": "../aurora/aurora-service/.understand-anything/domain-graph.json",
       "http": { "basePath": "/aurora", "gatewayPrefix": "" },
-      "protocols": { "dubbo": true, "http": true }
+      "mq": { "consumerBaseClass": "AbstractRocketMqHandler", "producerClass": "MqSendService" },
+      "protocols": { "dubbo": true, "http": true, "mq": true }
     },
     {
       "serviceId": "backend-aurora",
@@ -18,7 +19,15 @@
       "graphRef": "../aurora/backend-aurora/.understand-anything/knowledge-graph.json",
       "domainRef": "../aurora/backend-aurora/.understand-anything/domain-graph.json",
       "http": { "basePath": "/backend-aurora", "gatewayPrefix": "" },
-      "protocols": { "dubbo": true, "http": true }
+      "protocols": { "dubbo": true, "http": true, "mq": true }
+    },
+    {
+      "serviceId": "aurora-web",
+      "repo": "aurora",
+      "root": "../aurora/aurora-web",
+      "graphRef": "../aurora/aurora-web/.understand-anything/knowledge-graph.json",
+      "domainRef": "../aurora/aurora-web/.understand-anything/domain-graph.json",
+      "protocols": { "dubbo": false, "http": true, "mq": false }
     },
     {
       "serviceId": "workorder-service",
@@ -27,7 +36,7 @@
       "graphRef": "../workorder/workorder-service/.understand-anything/knowledge-graph.json",
       "domainRef": "../workorder/workorder-service/.understand-anything/domain-graph.json",
       "http": { "basePath": "/workorder", "gatewayPrefix": "" },
-      "protocols": { "dubbo": true, "http": true }
+      "protocols": { "dubbo": true, "http": true, "mq": true }
     }
   ]
 }

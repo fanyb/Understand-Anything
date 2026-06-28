@@ -67,13 +67,29 @@
             }
           }
         },
+        "mq": {
+          "type": "object",
+          "description": "MQ extractor config for self-wrapped RocketMQ (DESIGN.md §6.1). Override only when a service names its base/send classes differently.",
+          "additionalProperties": false,
+          "properties": {
+            "consumerBaseClass": {
+              "type": "string",
+              "description": "Simple name of the MQ consumer base class. Default \"AbstractRocketMqHandler\"."
+            },
+            "producerClass": {
+              "type": "string",
+              "description": "Simple name of the MQ send service whose .send(topic, …) marks a producer. Default \"MqSendService\"."
+            }
+          }
+        },
         "protocols": {
           "type": "object",
-          "description": "Per-protocol extraction switches. Omitted protocols default to enabled for dubbo/http. v0.1 supports dubbo + http; mq is v0.2.",
+          "description": "Per-protocol extraction switches. Omitted protocols default to enabled. v0.2 supports dubbo + http (Java providers + fe consumers) + mq.",
           "additionalProperties": false,
           "properties": {
             "dubbo": { "type": "boolean", "default": true },
-            "http": { "type": "boolean", "default": true }
+            "http": { "type": "boolean", "default": true },
+            "mq": { "type": "boolean", "default": true }
           }
         }
       }
