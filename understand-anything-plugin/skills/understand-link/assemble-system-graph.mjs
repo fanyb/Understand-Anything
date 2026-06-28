@@ -12,12 +12,12 @@
  *   - unresolved[]: carried through from the join (R5)
  *
  * Usage:
- *   node assemble-system-graph.mjs <registry.json> <cross-edges.json> <system-graph.json>
+ *   node assemble-system-graph.mjs <registry-path> <cross-edges.json> <system-graph.json> [--backend=json|sqlite]
  */
 
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildIndexes } from './registry/json-store.mjs';
+import { getStore, buildIndexes } from './registry/index.mjs';
 
 /** Pure: build the system graph document. */
 export function assembleSystemGraph(reg, crossResult) {
@@ -82,15 +82,19 @@ export function assembleSystemGraph(reg, crossResult) {
   };
 }
 
-function main() {
-  const [, , registryPath, crossEdgesPath, outputPath] = process.argv;
+async function main() {
+  const args = process.argv.slice(2);
+  const backendArg = args.find((a) => a.startsWith('--backend='));
+  const backend = backendArg ? backendArg.split('=')[1] : 'json';
+  const [registryPath, crossEdgesPath, outputPath] = args.filter((a) => !a.startsWith('--'));
   if (!registryPath || !crossEdgesPath || !outputPath) {
     process.stderr.write(
-      'Usage: node assemble-system-graph.mjs <registry.json> <cross-edges.json> <system-graph.json>\n',
+      'Usage: node assemble-system-graph.mjs <registry-path> <cross-edges.json> <system-graph.json> [--backend=json|sqlite]\n',
     );
     process.exit(1);
   }
-  const reg = JSON.parse(readFileSync(registryPath, 'utf-8'));
+  const store = await getStore(backend);
+  const reg = store.load(registryPath);
   const crossResult = JSON.parse(readFileSync(crossEdgesPath, 'utf-8'));
   const graph = assembleSystemGraph(reg, crossResult);
   writeFileSync(outputPath, JSON.stringify(graph, null, 2), 'utf-8');
@@ -112,7 +116,7 @@ function isCliEntry() {
 
 if (isCliEntry()) {
   try {
-    main();
+    await main();
   } catch (err) {
     process.stderr.write(`assemble-system-graph.mjs failed: ${err.message}\n`);
     process.exit(1);

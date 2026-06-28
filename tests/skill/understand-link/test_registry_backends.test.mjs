@@ -143,5 +143,13 @@ describe.skipIf(!sqliteAvailable)('sqlite backend parity with json', () => {
     expect(out.crossEdges[0]).toMatchObject({
       protocol: 'dubbo', sourceService: 'workorder-service', targetService: 'aurora-service', domain: '派单',
     });
+
+    // Phase 5 (assemble) must also read the registry through the backend factory.
+    const graphPath = join(W, 'cli-system.json');
+    const r3 = spawnSync('node', [join(SKILL, 'assemble-system-graph.mjs'), db, cross, graphPath, '--backend=sqlite'], { encoding: 'utf-8' });
+    expect(r3.status).toBe(0);
+    const g = JSON.parse(readFileSync(graphPath, 'utf-8'));
+    expect(g.services.map((s) => s.id)).toEqual(['aurora-service', 'workorder-service']);
+    expect(g.edges.filter((e) => e.type === 'calls')).toHaveLength(1);
   });
 });

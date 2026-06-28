@@ -169,8 +169,8 @@ PREV="$LINK_DIR/intermediate/cross-edges.prev.json"
 
 ```bash
 node "$SKILL_DIR/assemble-system-graph.mjs" \
-  "$LINK_DIR/registry.json" "$LINK_DIR/intermediate/cross-edges.json" \
-  "$LINK_DIR/system-graph.json"
+  "$REGISTRY" "$LINK_DIR/intermediate/cross-edges.json" \
+  "$LINK_DIR/system-graph.json" --backend="$BACKEND"
 ```
 
 ## Phase 6 — Validate (DESIGN.md §11.6)
