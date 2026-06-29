@@ -98,6 +98,76 @@ export interface KnowledgeGraph {
   tour: TourStep[];
 }
 
+// === System graph (multi-repo federation, produced by /understand-link) ===
+// The federated Tier-0 graph: services + business domains as nodes, cross-service
+// calls + per-domain flow as edges. It is reference-based — each service points to
+// its own knowledge-graph.json via graphRef (relative to the workspace root, may
+// contain "../"); the dashboard lazy-loads those for drill-down.
+
+/** A drill-down anchor into a service's own graph. graphRef can be null when the service has no graph. */
+export interface SystemGraphRef {
+  graphRef: string | null;
+  nodeId: string;
+}
+
+export interface SystemService {
+  id: string;
+  repo: string;
+  domains: string[];
+  graphRef: string;
+  stats: { nodes: number; edges: number };
+}
+
+export interface SystemDomain {
+  id: string; // "domain:<name>"
+  name: string;
+  serviceIds: string[];
+}
+
+/** Cross-service call edge. `protocol` is the consumer kind (dubbo/http/mq today). */
+export interface SystemCallsEdge {
+  id: string;
+  type: "calls";
+  protocol: string;
+  domain?: string; // from the provider side; may be absent
+  sourceService: string;
+  targetService: string;
+  key: string;
+  from: SystemGraphRef;
+  to: SystemGraphRef;
+  confidence: number;
+  evidence: string;
+}
+
+/** Per-domain flow skeleton: the ordered sequence of services touched, plus protocols. */
+export interface SystemFlowEdge {
+  id: string;
+  type: "flow";
+  domain: string;
+  sequence: string[];
+  via: string[];
+}
+
+export type SystemEdge = SystemCallsEdge | SystemFlowEdge;
+
+/** A consumer whose provider was not found in the registry (carried through for reporting). */
+export interface SystemUnresolved {
+  kind: string;
+  key: string;
+  consumerService: string;
+  nodeId: string;
+  reason: string;
+}
+
+export interface SystemGraph {
+  version: string;
+  kind: "system";
+  services: SystemService[];
+  domains: SystemDomain[];
+  edges: SystemEdge[];
+  unresolved: SystemUnresolved[];
+}
+
 // Theme configuration (for dashboard customization)
 export interface ThemeConfig {
   presetId: string;

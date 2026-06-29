@@ -5,101 +5,27 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import {
+  graphFileCandidates,
+  readAndSanitizeGraph,
+  readSourceFile,
+  readServiceFile,
+  readSystemGraph,
+  readServiceGraph,
+  readServiceDomainGraph,
+  loadAllowedRefs,
+} from "./server/graphFiles";
 
 // Generate a one-time token when the server process starts.
 // This token is printed to the terminal and must be in the URL
-// to fetch knowledge-graph.json or diff-overlay.json.
+// to fetch any data endpoint.
 const ACCESS_TOKEN = process.env.UNDERSTAND_ACCESS_TOKEN || crypto.randomBytes(16).toString("hex");
-const MAX_SOURCE_FILE_BYTES = 1024 * 1024;
 
-function graphFileCandidates(fileName: string): string[] {
-  const graphDir = process.env.GRAPH_DIR;
-  return [
-    ...(graphDir
-      ? [path.resolve(graphDir, `.understand-anything/${fileName}`)]
-      : []),
-    path.resolve(process.cwd(), `.understand-anything/${fileName}`),
-    path.resolve(process.cwd(), `../../../.understand-anything/${fileName}`),
-  ];
-}
-
-function findGraphFile(fileName: string): string | null {
-  return graphFileCandidates(fileName).find((candidate) => fs.existsSync(candidate)) ?? null;
-}
-
-function projectRootFromGraphFile(candidate: string): string {
-  return path.dirname(path.dirname(candidate));
-}
-
-function normalizeGraphPath(filePath: string, projectRoot: string): string | null {
-  const rawPath = path.isAbsolute(filePath)
-    ? filePath.startsWith(projectRoot)
-      ? path.relative(projectRoot, filePath)
-      : null
-    : filePath;
-  if (rawPath === null) return null;
-  const normalized = path.normalize(rawPath);
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized.includes("\0") ||
-    normalized === ".." ||
-    normalized.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(normalized)
-  ) {
-    return null;
-  }
-  return normalized.split(path.sep).join("/");
-}
-
-function graphFilePathSet(graphFile: string, projectRoot: string): Set<string> {
-  const allowed = new Set<string>();
-  try {
-    const raw = JSON.parse(fs.readFileSync(graphFile, "utf-8")) as {
-      nodes?: Array<Record<string, unknown>>;
-    };
-    for (const node of raw.nodes ?? []) {
-      if (typeof node.filePath !== "string") continue;
-      const normalized = normalizeGraphPath(node.filePath, projectRoot);
-      if (normalized) allowed.add(normalized);
-    }
-  } catch {
-    return allowed;
-  }
-  return allowed;
-}
-
-function detectLanguage(filePath: string): string {
-  const ext = path.extname(filePath).slice(1).toLowerCase();
-  const byExt: Record<string, string> = {
-    bash: "bash",
-    c: "c",
-    cc: "cpp",
-    cpp: "cpp",
-    cs: "csharp",
-    css: "css",
-    go: "go",
-    h: "c",
-    hpp: "cpp",
-    html: "markup",
-    java: "java",
-    js: "javascript",
-    jsx: "jsx",
-    json: "json",
-    md: "markdown",
-    mjs: "javascript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    sh: "bash",
-    ts: "typescript",
-    tsx: "tsx",
-    txt: "text",
-    yaml: "yaml",
-    yml: "yaml",
-  };
-  return byExt[ext] ?? "text";
-}
+// Multi-repo (system) mode: set by /understand-link-dashboard. LINK_DIR is the
+// workspace root (where the manifest + .understand-link/ live); DASHBOARD_MODE
+// tells the frontend which shell to boot (single vs split system view).
+const LINK_DIR = process.env.LINK_DIR || null;
+const DASHBOARD_MODE = process.env.DASHBOARD_MODE === "system" ? "system" : "single";
 
 function sendJson(res: import("http").ServerResponse, statusCode: number, payload: unknown) {
   res.statusCode = statusCode;
@@ -107,79 +33,13 @@ function sendJson(res: import("http").ServerResponse, statusCode: number, payloa
   res.end(JSON.stringify(payload));
 }
 
-function rejectFileRequest(message: string, statusCode = 400) {
-  return { statusCode, payload: { error: message } };
-}
-
-function readSourceFile(url: URL) {
-  const requestedPath = url.searchParams.get("path") ?? "";
-  if (!requestedPath) return rejectFileRequest("Missing path");
-  if (requestedPath.includes("\0")) return rejectFileRequest("Invalid path");
-  if (path.isAbsolute(requestedPath)) return rejectFileRequest("Absolute paths are not allowed");
-
-  const normalizedPath = path.normalize(requestedPath);
-  if (
-    normalizedPath === "." ||
-    normalizedPath.startsWith(`..${path.sep}`) ||
-    normalizedPath === ".." ||
-    path.isAbsolute(normalizedPath)
-  ) {
-    return rejectFileRequest("Path must stay inside the project");
-  }
-
-  const graphFile = findGraphFile("knowledge-graph.json");
-  if (!graphFile) {
-    return rejectFileRequest("No knowledge graph found. Run /understand first.", 404);
-  }
-
-  const projectRoot = projectRootFromGraphFile(graphFile);
-  const absoluteFile = path.resolve(projectRoot, normalizedPath);
-  const relativeToRoot = path.relative(projectRoot, absoluteFile);
-  if (
-    !relativeToRoot ||
-    relativeToRoot.startsWith(`..${path.sep}`) ||
-    relativeToRoot === ".." ||
-    path.isAbsolute(relativeToRoot)
-  ) {
-    return rejectFileRequest("Path must stay inside the project");
-  }
-  const safeRelativePath = relativeToRoot.split(path.sep).join("/");
-  if (!graphFilePathSet(graphFile, projectRoot).has(safeRelativePath)) {
-    return rejectFileRequest("File is not in the knowledge graph", 404);
-  }
-
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(absoluteFile);
-  } catch {
-    return rejectFileRequest("File not found", 404);
-  }
-
-  if (!stat.isFile()) return rejectFileRequest("Path is not a file");
-  if (stat.size > MAX_SOURCE_FILE_BYTES) {
-    return rejectFileRequest("File is too large to preview", 413);
-  }
-
-  const buffer = fs.readFileSync(absoluteFile);
-  if (buffer.includes(0)) return rejectFileRequest("Binary files cannot be previewed", 415);
-
-  const content = buffer.toString("utf8");
-  return {
-    statusCode: 200,
-    payload: {
-      path: safeRelativePath,
-      language: detectLanguage(relativeToRoot),
-      content,
-      sizeBytes: buffer.byteLength,
-      lineCount: content.length === 0 ? 0 : content.split(/\r\n|\n|\r/).length,
-    },
-  };
-}
-
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/__tests__/**/*.test.ts"],
+    include: [
+      "src/**/__tests__/**/*.test.ts",
+      "server/**/__tests__/**/*.test.ts",
+    ],
   },
 
   // FIX 1 — bind only to localhost, not 0.0.0.0
@@ -253,7 +113,10 @@ export default defineConfig({
             pathname === "/diff-overlay.json" ||
             pathname === "/meta.json" ||
             pathname === "/config.json" ||
-            pathname === "/file-content.json";
+            pathname === "/file-content.json" ||
+            pathname === "/system-graph.json" ||
+            pathname === "/service-graph.json" ||
+            pathname === "/service-domain-graph.json";
 
           if (!isProtectedEndpoint) {
             next();
@@ -261,25 +124,47 @@ export default defineConfig({
           }
 
           // FIX 3 — require the one-time token on all data endpoints.
-          // Requests without a matching ?token= get a 403.
           if (url.searchParams.get("token") !== ACCESS_TOKEN) {
             sendJson(res, 403, { error: "Forbidden: missing or invalid token" });
             return;
           }
 
-          if (pathname === "/file-content.json") {
-            const result = readSourceFile(url);
-            sendJson(res, result.statusCode, result.payload);
+          // --- Multi-repo (system) endpoints ---
+          if (pathname === "/system-graph.json") {
+            const r = readSystemGraph(LINK_DIR);
+            sendJson(res, r.statusCode, r.payload);
+            return;
+          }
+          if (pathname === "/service-graph.json") {
+            const r = readServiceGraph(LINK_DIR, url.searchParams.get("ref"), loadAllowedRefs(LINK_DIR));
+            sendJson(res, r.statusCode, r.payload);
+            return;
+          }
+          if (pathname === "/service-domain-graph.json") {
+            const r = readServiceDomainGraph(LINK_DIR, url.searchParams.get("ref"), loadAllowedRefs(LINK_DIR));
+            sendJson(res, r.statusCode, r.payload);
             return;
           }
 
+          // --- File content (single-repo by path, or per-service by ref+path) ---
+          if (pathname === "/file-content.json") {
+            const ref = url.searchParams.get("ref");
+            const requestedPath = url.searchParams.get("path") ?? "";
+            const r = ref
+              ? readServiceFile(LINK_DIR, ref, requestedPath, loadAllowedRefs(LINK_DIR))
+              : readSourceFile(requestedPath);
+            sendJson(res, r.statusCode, r.payload);
+            return;
+          }
+
+          // --- Config (single-repo file if present) + server-injected mode ---
           if (pathname === "/config.json") {
             const configCandidates = graphFileCandidates("config.json");
             for (const candidate of configCandidates) {
               if (fs.existsSync(candidate)) {
                 try {
                   const raw = JSON.parse(fs.readFileSync(candidate, "utf-8"));
-                  sendJson(res, 200, raw);
+                  sendJson(res, 200, { ...raw, mode: DASHBOARD_MODE });
                   return;
                 } catch {
                   sendJson(res, 500, { error: "Failed to read config file" });
@@ -287,10 +172,11 @@ export default defineConfig({
                 }
               }
             }
-            sendJson(res, 200, { autoUpdate: false, outputLanguage: "en" });
+            sendJson(res, 200, { autoUpdate: false, outputLanguage: "en", mode: DASHBOARD_MODE });
             return;
           }
 
+          // --- Single-repo graph endpoints (sanitised) ---
           const fileName =
             pathname === "/diff-overlay.json"
               ? "diff-overlay.json"
@@ -300,50 +186,10 @@ export default defineConfig({
               ? "domain-graph.json"
               : "knowledge-graph.json";
 
-          const candidates = graphFileCandidates(fileName);
-
-          for (const candidate of candidates) {
+          for (const candidate of graphFileCandidates(fileName)) {
             if (!fs.existsSync(candidate)) continue;
-
-            // FIX 2 — sanitise absolute file paths before sending the JSON.
-            // Nodes can contain filePath values like /Users/alice/company/src/auth.ts.
-            // We convert those to relative paths (src/auth.ts) so the developer's
-            // home directory and company directory layout are not leaked.
-            try {
-              const raw = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
-                nodes?: Array<Record<string, unknown>>;
-                [key: string]: unknown;
-              };
-
-              // Derive the project root from the candidate path so we can
-              // make file paths relative to it.
-              const projectRoot = projectRootFromGraphFile(candidate);
-
-              if (Array.isArray(raw.nodes)) {
-                raw.nodes = raw.nodes.map((node) => {
-                  if (typeof node.filePath !== "string") return node;
-                  const abs = node.filePath;
-                  // Only relativise paths that actually sit inside projectRoot.
-                  // Leave external or already-relative paths untouched.
-                  const rel = abs.startsWith(projectRoot)
-                    ? abs.slice(projectRoot.length).replace(/^[\\/]/, "")
-                    : path.isAbsolute(abs)
-                    ? path.basename(abs) // absolute but outside root — use filename only
-                    : abs;              // already relative — keep as-is
-                  return { ...node, filePath: rel };
-                });
-              }
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(raw));
-            } catch (err) {
-              // If we cannot parse or sanitise the file, refuse to serve it
-              // rather than accidentally leaking raw content.
-              console.error("[understand-anything] Failed to sanitise graph file:", err);
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ error: "Failed to read graph file" }));
-            }
+            const r = readAndSanitizeGraph(candidate);
+            sendJson(res, r.statusCode, r.payload);
             return;
           }
 

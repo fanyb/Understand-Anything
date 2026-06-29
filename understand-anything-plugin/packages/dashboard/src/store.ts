@@ -8,6 +8,13 @@ import type {
   TourStep,
 } from "@understand-anything/core/types";
 import type { ReactFlowInstance } from "@xyflow/react";
+import { fetchAndValidateServiceGraph } from "./utils/serviceGraph";
+
+/** Options for drilling into a service graph from the system overview. */
+export interface LoadServiceGraphOptions {
+  selectNodeId?: string | null;
+  accessToken?: string | null;
+}
 
 export type Persona = "non-technical" | "junior" | "experienced";
 export type NavigationLevel = "overview" | "layer-detail";
@@ -154,6 +161,15 @@ interface DashboardStore {
   showFunctionsInClassView: boolean;
   toggleShowFunctionsInClassView: () => void;
 
+  // Multi-repo drill-down: the right pane (this store) renders one service's graph,
+  // lazily fetched + cached by graphRef. The left pane (system overview) lives in a
+  // separate store (systemStore.ts) so these stay isolated.
+  serviceGraphCache: Map<string, KnowledgeGraph>;
+  activeServiceRef: string | null;
+  serviceLoadError: string | null;
+  loadServiceGraph: (ref: string, opts?: LoadServiceGraphOptions) => Promise<void>;
+  clearServiceGraph: () => void;
+
   setGraph: (graph: KnowledgeGraph) => void;
   selectNode: (nodeId: string | null) => void;
   navigateToNode: (nodeId: string) => void;
@@ -292,6 +308,9 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   nodeIdToLayerId: new Map<string, string>(),
   nodeIdToLayerIds: new Map<string, Set<string>>(),
   selectedNodeId: null,
+  serviceGraphCache: new Map<string, KnowledgeGraph>(),
+  activeServiceRef: null,
+  serviceLoadError: null,
   searchQuery: "",
   searchResults: [],
   searchEngine: null,
@@ -405,6 +424,32 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       set({ selectedNodeId: nodeId });
     }
   },
+
+  loadServiceGraph: async (ref, opts) => {
+    const select = () => {
+      if (opts?.selectNodeId) get().selectNode(opts.selectNodeId);
+    };
+    // Cache hit — no re-fetch; just swap the right pane to this service.
+    const cached = get().serviceGraphCache.get(ref);
+    if (cached) {
+      get().setGraph(cached);
+      set({ activeServiceRef: ref, serviceLoadError: null });
+      select();
+      return;
+    }
+    const result = await fetchAndValidateServiceGraph(ref, opts?.accessToken ?? null);
+    if (!result.ok) {
+      set({ serviceLoadError: result.error, activeServiceRef: ref });
+      return;
+    }
+    const nextCache = new Map(get().serviceGraphCache);
+    nextCache.set(ref, result.graph);
+    set({ serviceGraphCache: nextCache, activeServiceRef: ref, serviceLoadError: null });
+    get().setGraph(result.graph);
+    select();
+  },
+
+  clearServiceGraph: () => set({ activeServiceRef: null, serviceLoadError: null }),
 
   navigateToNode: (nodeId) => {
     get().navigateToNodeInLayer(nodeId);

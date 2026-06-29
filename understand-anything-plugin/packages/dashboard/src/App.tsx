@@ -1,7 +1,11 @@
-import { useEffect, useState, useMemo, useCallback, lazy, Suspense } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense, type MouseEvent as ReactMouseEvent } from "react";
 import { validateGraph } from "@understand-anything/core/schema";
 import type { GraphIssue } from "@understand-anything/core/schema";
 import { useDashboardStore } from "./store";
+import { useSystemStore } from "./systemStore";
+import SystemGraphView from "./components/SystemGraphView";
+import SystemSidebar from "./components/SystemSidebar";
+import { fetchAndValidateSystemGraph } from "./utils/systemGraphClient";
 import GraphView from "./components/GraphView";
 import DomainGraphView from "./components/DomainGraphView";
 import KnowledgeGraphView from "./components/KnowledgeGraphView";
@@ -96,7 +100,7 @@ function App() {
 
   // In demo mode, skip token gate entirely
   if (DEMO_MODE) {
-    return <Dashboard accessToken="__demo__" />;
+    return <AppShell accessToken="__demo__" />;
   }
 
   // Show the token gate when no token is available
@@ -104,15 +108,17 @@ function App() {
     return <TokenGate onTokenValid={handleTokenValid} />;
   }
 
-  return <Dashboard accessToken={accessToken} />;
+  return <AppShell accessToken={accessToken} />;
 }
 
-function Dashboard({ accessToken }: { accessToken: string }) {
-  const setGraph = useDashboardStore((s) => s.setGraph);
-  const setDomainGraph = useDashboardStore((s) => s.setDomainGraph);
-  const setDiffOverlay = useDashboardStore((s) => s.setDiffOverlay);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [graphIssues, setGraphIssues] = useState<GraphIssue[]>([]);
+/**
+ * Top-level shell. Reads the server-injected `mode` from /config.json once, then
+ * mounts either the single-repo dashboard (full screen) or the multi-repo system
+ * dashboard (split screen). The I18n + theme providers wrap both so every pane
+ * shares them. Theme + language come from meta.json / config.json.
+ */
+function AppShell({ accessToken }: { accessToken: string }) {
+  const [mode, setMode] = useState<"single" | "system" | null>(null);
   const [metaTheme, setMetaTheme] = useState<ThemeConfig | null>(null);
   const [outputLanguage, setOutputLanguage] = useState<string | undefined>();
 
@@ -127,11 +133,149 @@ function Dashboard({ accessToken }: { accessToken: string }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((config) => {
         if (config?.outputLanguage) setOutputLanguage(config.outputLanguage);
+        setMode(config?.mode === "system" ? "system" : "single");
       })
-      .catch(() => {});
+      .catch(() => setMode("single"));
   }, []);
 
+  // Brief gate until we know which shell to mount (avoids a flash + a wrong-mode mount).
+  if (mode === null) {
+    return <div className="h-screen w-screen bg-root" />;
+  }
+
+  return (
+    <I18nProvider language={outputLanguage ?? "en"}>
+      <ThemeProvider metaTheme={metaTheme}>
+        {mode === "system" ? (
+          <SystemDashboard accessToken={accessToken} />
+        ) : (
+          <div className="h-screen w-screen">
+            <SingleRepoDashboard accessToken={accessToken} bootstrap enableOnboarding />
+          </div>
+        )}
+      </ThemeProvider>
+    </I18nProvider>
+  );
+}
+
+/**
+ * The multi-repo system dashboard. Split-screen: left pane shows the system overview
+ * graph (cross-service calls); drilling into a service node loads that service's own
+ * graph into the right pane (the single-repo dashboard, driven externally).
+ */
+function SystemDashboard({ accessToken }: { accessToken: string }) {
+  const [leftPct, setLeftPct] = useState(52);
+  const [sysError, setSysError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const activeServiceRef = useDashboardStore((s) => s.activeServiceRef);
+  const serviceLoadError = useDashboardStore((s) => s.serviceLoadError);
+
   useEffect(() => {
+    let cancelled = false;
+    fetchAndValidateSystemGraph(accessToken).then((r) => {
+      if (cancelled) return;
+      if (r.ok) useSystemStore.getState().setSystemGraph(r.graph);
+      else setSysError(r.error);
+    });
+    return () => { cancelled = true; };
+  }, [accessToken]);
+
+  const onDrill = useCallback(
+    (ref: string | null | undefined, nodeId?: string) => {
+      if (!ref) return;
+      void useDashboardStore.getState().loadServiceGraph(ref, { accessToken, selectNodeId: nodeId });
+    },
+    [accessToken],
+  );
+
+  const onDividerDown = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const onMove = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setLeftPct(Math.min(80, Math.max(20, pct)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="h-screen w-screen flex bg-root text-text-primary overflow-hidden">
+      {/* LEFT: system overview */}
+      <div className="h-full flex flex-col min-w-0" style={{ width: `${leftPct}%` }}>
+        <header className="flex items-center gap-3 px-4 py-3 bg-surface border-b border-border-subtle shrink-0">
+          <h1 className="font-heading text-base text-text-primary tracking-wide">System Overview</h1>
+        </header>
+        {sysError && (
+          <div className="px-4 py-2 bg-red-900/30 border-b border-red-700 text-red-200 text-xs">{sysError}</div>
+        )}
+        <div className="flex-1 flex min-h-0">
+          <div className="flex-1 min-w-0 min-h-0 relative">
+            <SystemGraphView onDrill={onDrill} />
+          </div>
+          <aside className="w-[300px] shrink-0 bg-surface border-l border-border-subtle overflow-hidden">
+            <SystemSidebar onDrill={onDrill} />
+          </aside>
+        </div>
+      </div>
+
+      {/* DIVIDER */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={onDividerDown}
+        className="w-1 shrink-0 cursor-col-resize bg-border-subtle hover:bg-accent/60 transition-colors"
+      />
+
+      {/* RIGHT: drilled service */}
+      <div className="h-full min-w-0 relative" style={{ width: `${100 - leftPct}%` }}>
+        {activeServiceRef ? (
+          <SingleRepoDashboard accessToken={accessToken} bootstrap={false} enableOnboarding={false} />
+        ) : (
+          <div className="h-full w-full flex items-center justify-center p-8 text-center">
+            <div className="max-w-xs text-text-muted text-sm">
+              Select a service node and double-click it (or use a drill button) to open its graph here.
+            </div>
+          </div>
+        )}
+        {serviceLoadError && (
+          <div className="absolute bottom-0 left-0 right-0 px-4 py-2 bg-red-900/40 border-t border-red-700 text-red-200 text-xs">
+            {serviceLoadError}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The single-repo dashboard. In single mode it bootstraps its own graph from the
+ * top-level endpoints; in the system split it is mounted with `bootstrap={false}`
+ * and its graph is driven externally by store.loadServiceGraph (drill-down).
+ */
+function SingleRepoDashboard({
+  accessToken,
+  bootstrap = true,
+  enableOnboarding = true,
+}: {
+  accessToken: string;
+  bootstrap?: boolean;
+  enableOnboarding?: boolean;
+}) {
+  const setGraph = useDashboardStore((s) => s.setGraph);
+  const setDomainGraph = useDashboardStore((s) => s.setDomainGraph);
+  const setDiffOverlay = useDashboardStore((s) => s.setDiffOverlay);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [graphIssues, setGraphIssues] = useState<GraphIssue[]>([]);
+
+  useEffect(() => {
+    if (!bootstrap) return;
     fetch(dataUrl("knowledge-graph.json", accessToken))
       .then((res) => res.json())
       .then((data: unknown) => {
@@ -162,9 +306,10 @@ function Dashboard({ accessToken }: { accessToken: string }) {
         console.error("Failed to load knowledge graph:", err);
         setLoadError(`Failed to load knowledge graph: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [setGraph]);
+  }, [setGraph, bootstrap]);
 
   useEffect(() => {
+    if (!bootstrap) return;
     fetch(dataUrl("diff-overlay.json", accessToken))
       .then((res) => {
         if (!res.ok) return null;
@@ -189,6 +334,7 @@ function Dashboard({ accessToken }: { accessToken: string }) {
   }, [setDiffOverlay]);
 
   useEffect(() => {
+    if (!bootstrap) return;
     fetch(dataUrl("domain-graph.json", accessToken))
       .then((res) => {
         if (!res.ok) return null;
@@ -204,18 +350,15 @@ function Dashboard({ accessToken }: { accessToken: string }) {
         }
       })
       .catch(() => {});
-  }, [setDomainGraph]);
+  }, [setDomainGraph, bootstrap]);
 
   return (
-    <I18nProvider language={outputLanguage ?? "en"}>
-      <ThemeProvider metaTheme={metaTheme}>
-        <DashboardContent
-          accessToken={accessToken}
-          loadError={loadError}
-          graphIssues={graphIssues}
-        />
-      </ThemeProvider>
-    </I18nProvider>
+    <DashboardContent
+      accessToken={accessToken}
+      loadError={loadError}
+      graphIssues={graphIssues}
+      enableOnboarding={enableOnboarding}
+    />
   );
 }
 
@@ -223,10 +366,12 @@ function DashboardContent({
   accessToken,
   loadError,
   graphIssues,
+  enableOnboarding = true,
 }: {
   accessToken: string;
   loadError: string | null;
   graphIssues: GraphIssue[];
+  enableOnboarding?: boolean;
 }) {
   const graph = useDashboardStore((s) => s.graph);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
@@ -246,7 +391,9 @@ function DashboardContent({
   const toggleShowFunctionsInClassView = useDashboardStore((s) => s.toggleShowFunctionsInClassView);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("info");
-  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => enableOnboarding && shouldShowOnboarding(),
+  );
   const dismissOnboarding = useCallback((remember: boolean) => {
     if (remember && typeof window !== "undefined") {
       window.localStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
@@ -441,7 +588,7 @@ function DashboardContent({
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-root text-text-primary noise-overlay">
+    <div className="h-full w-full flex flex-col bg-root text-text-primary noise-overlay">
       {/* Header */}
       <header className="flex items-center px-3 sm:px-5 py-3 bg-surface border-b border-border-subtle shrink-0 gap-2 sm:gap-4">
         {/* Left — fixed */}

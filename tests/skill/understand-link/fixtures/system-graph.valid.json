@@ -1,0 +1,52 @@
+{
+  "version": "1.0.0",
+  "kind": "system",
+  "services": [
+    {
+      "id": "aurora-service",
+      "repo": "aurora",
+      "domains": ["派单"],
+      "graphRef": "aurora-service/.understand-anything/knowledge-graph.json",
+      "stats": { "nodes": 3, "edges": 1 }
+    },
+    {
+      "id": "backend-aurora",
+      "repo": "aurora",
+      "domains": ["派单"],
+      "graphRef": "backend-aurora/.understand-anything/knowledge-graph.json",
+      "stats": { "nodes": 2, "edges": 0 }
+    }
+  ],
+  "domains": [
+    { "id": "domain:派单", "name": "派单", "serviceIds": ["aurora-service", "backend-aurora"] }
+  ],
+  "edges": [
+    {
+      "id": "x1",
+      "type": "calls",
+      "protocol": "dubbo",
+      "domain": "派单",
+      "sourceService": "backend-aurora",
+      "targetService": "aurora-service",
+      "key": "com.hk.simba.aurora.open.api.DispatchPlanOpenService#queryPlan",
+      "from": {
+        "graphRef": "backend-aurora/.understand-anything/knowledge-graph.json",
+        "nodeId": "file:backend-aurora/src/DispatchPlanManager.java"
+      },
+      "to": {
+        "graphRef": "aurora-service/.understand-anything/knowledge-graph.json",
+        "nodeId": "file:aurora-service/src/DispatchPlanOpenServiceImpl.java"
+      },
+      "confidence": 1,
+      "evidence": "@DubboReference 接口匹配"
+    },
+    {
+      "id": "f1",
+      "type": "flow",
+      "domain": "派单",
+      "sequence": ["backend-aurora", "aurora-service"],
+      "via": ["dubbo"]
+    }
+  ],
+  "unresolved": []
+}

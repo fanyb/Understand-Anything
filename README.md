@@ -174,6 +174,10 @@ An interactive web dashboard opens with your codebase visualized as a graph — 
 # Analyze a Karpathy-pattern LLM wiki knowledge base
 /understand-knowledge ~/path/to/wiki
 
+# Visualize a multi-repo system graph (services + cross-service calls) built by /understand-link,
+# with split-screen drill-down into each service's own graph
+/understand-link-dashboard
+
 # Re-run anytime — incremental by default (only re-analyzes changed files)
 /understand
 

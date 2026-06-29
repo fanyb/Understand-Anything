@@ -1,4 +1,11 @@
 import { z } from "zod";
+import type {
+  SystemGraph,
+  SystemService,
+  SystemDomain,
+  SystemEdge,
+  SystemUnresolved,
+} from "./types";
 
 // Edge types (35 values across 8 categories)
 export const EdgeTypeSchema = z.enum([
@@ -660,4 +667,148 @@ export function validateGraph(data: unknown): ValidationResult {
   };
 
   return { success: true, data: graph, issues, errors: buildErrors(issues) };
+}
+
+// === System graph (multi-repo federation) validation ===
+// Structural / read-safety validator for system-graph.json produced by
+// /understand-link. Unlike validateGraph this needs no alias/auto-fix (the input is
+// machine-generated, not LLM output); it just keeps valid records and drops broken
+// ones so the dashboard can read safely. Semantic/graph-integrity checks live in
+// understand-link's own validate-system-graph.mjs (a separate, disjoint validator).
+
+const SystemGraphRefSchema = z.object({
+  graphRef: z.string().nullable(),
+  nodeId: z.string(),
+}).passthrough();
+
+export const SystemServiceSchema = z.object({
+  id: z.string(),
+  repo: z.string(),
+  domains: z.array(z.string()),
+  graphRef: z.string(),
+  stats: z.object({ nodes: z.number(), edges: z.number() }).passthrough(),
+}).passthrough();
+
+export const SystemDomainSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  serviceIds: z.array(z.string()),
+}).passthrough();
+
+export const SystemCallsEdgeSchema = z.object({
+  id: z.string(),
+  type: z.literal("calls"),
+  protocol: z.string(),
+  domain: z.string().optional(),
+  sourceService: z.string(),
+  targetService: z.string(),
+  key: z.string(),
+  from: SystemGraphRefSchema,
+  to: SystemGraphRefSchema,
+  confidence: z.number(),
+  evidence: z.string(),
+}).passthrough();
+
+export const SystemFlowEdgeSchema = z.object({
+  id: z.string(),
+  type: z.literal("flow"),
+  domain: z.string(),
+  sequence: z.array(z.string()),
+  via: z.array(z.string()),
+}).passthrough();
+
+export const SystemEdgeSchema = z.discriminatedUnion("type", [
+  SystemCallsEdgeSchema,
+  SystemFlowEdgeSchema,
+]);
+
+export const SystemUnresolvedSchema = z.object({
+  kind: z.string(),
+  key: z.string(),
+  consumerService: z.string(),
+  nodeId: z.string(),
+  reason: z.string(),
+}).passthrough();
+
+export const SystemGraphSchema = z.object({
+  version: z.string(),
+  kind: z.literal("system"),
+  services: z.array(SystemServiceSchema),
+  domains: z.array(SystemDomainSchema),
+  edges: z.array(SystemEdgeSchema),
+  unresolved: z.array(SystemUnresolvedSchema),
+}).passthrough();
+
+export interface SystemValidationResult {
+  success: boolean;
+  data?: SystemGraph;
+  issues: GraphIssue[];
+  fatal?: string;
+}
+
+/** Drop invalid records from one array, pushing a "dropped" issue per failure. */
+function validateSystemCollection<T>(
+  raw: unknown,
+  name: string,
+  schema: z.ZodTypeAny,
+  issues: GraphIssue[],
+): T[] {
+  const out: T[] = [];
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < raw.length; i++) {
+    const result = schema.safeParse(raw[i]);
+    if (result.success) {
+      out.push(result.data as T);
+    } else {
+      issues.push({
+        level: "dropped",
+        category: `invalid-${name}`,
+        message: `${name}[${i}]: ${result.error.issues[0]?.message ?? "validation failed"} — removed`,
+        path: `${name}[${i}]`,
+      });
+    }
+  }
+  return out;
+}
+
+export function validateSystemGraph(data: unknown): SystemValidationResult {
+  if (typeof data !== "object" || data === null) {
+    return { success: false, issues: [], fatal: "Invalid input: not an object" };
+  }
+  const raw = data as Record<string, unknown>;
+  const issues: GraphIssue[] = [];
+
+  if (raw.kind !== "system") {
+    const fatal = `Expected system graph (kind: "system"), got ${JSON.stringify(raw.kind)}`;
+    return { success: false, issues, fatal };
+  }
+
+  // Top-level collections must be arrays when present.
+  for (const collection of ["services", "domains", "edges", "unresolved"] as const) {
+    if (collection in raw && raw[collection] !== undefined && !Array.isArray(raw[collection])) {
+      const issue = buildInvalidCollectionIssue(collection);
+      issues.push(issue);
+      return { success: false, issues, fatal: issue.message };
+    }
+  }
+
+  const services = validateSystemCollection<SystemService>(raw.services, "services", SystemServiceSchema, issues);
+  if (services.length === 0) {
+    const fatal = "No valid services found in system graph";
+    return { success: false, issues, fatal };
+  }
+
+  const domains = validateSystemCollection<SystemDomain>(raw.domains, "domains", SystemDomainSchema, issues);
+  const edges = validateSystemCollection<SystemEdge>(raw.edges, "edges", SystemEdgeSchema, issues);
+  const unresolved = validateSystemCollection<SystemUnresolved>(raw.unresolved, "unresolved", SystemUnresolvedSchema, issues);
+
+  const graph: SystemGraph = {
+    version: typeof raw.version === "string" ? raw.version : "1.0.0",
+    kind: "system",
+    services,
+    domains,
+    edges,
+    unresolved,
+  };
+  return { success: true, data: graph, issues };
 }
