@@ -63,7 +63,9 @@ The **manifest is the single entry point** (DESIGN.md §13 decision ①). It is
 hand-maintained — see `manifest.schema.json` and `manifest.example.json` in this
 directory. Each service entry gives its `serviceId`, source `root`, the paths to
 its `knowledge-graph.json` (`graphRef`) and `domain-graph.json` (`domainRef`),
-and the HTTP `basePath` / `gatewayPrefix` the static scan cannot infer.
+and the HTTP `basePath` / `gatewayPrefix` the static scan cannot infer. When it
+is missing, Phase 0 auto-drafts the inferable parts from the analyzed services on
+disk and stops for the user to fill the rest and confirm (Phase 0 step 2).
 
 ---
 
@@ -102,9 +104,34 @@ and the HTTP `basePath` / `gatewayPrefix` the static scan cannot infer.
    ```
 
 2. **Resolve the manifest.** Use the `$ARGUMENTS` path if given; else the first
-   that exists of `./understand-link.manifest.json`, `./manifest.json`. If none
-   exists, tell the user to create one from `$SKILL_DIR/manifest.example.json`
-   and **STOP**.
+   that exists of `./understand-link.manifest.json`, `./manifest.json`.
+
+   **If none exists, auto-draft one and STOP for confirmation** (do NOT run any
+   later phase yet). Scan the current directory for services that have already
+   been analyzed (each owns a `.understand-anything/knowledge-graph.json`) and
+   write a draft manifest:
+
+   ```bash
+   SCAN_ROOT="$(pwd)"                                  # the dir the user ran the skill in
+   MANIFEST="$SCAN_ROOT/understand-link.manifest.json"
+   node "$SKILL_DIR/generate-manifest.mjs" "$SCAN_ROOT" "$MANIFEST"
+   ```
+
+   - **Exit 2 (no services found):** nothing under the scan root has been
+     `/understand`'d. Relay that, point the user at `$SKILL_DIR/manifest.example.json`,
+     and **STOP** — there is nothing to link yet.
+   - **Otherwise:** Read the drafted `$MANIFEST` and show the user (a) the list of
+     services it found, (b) any service still missing `domain-graph.json` (run
+     `/understand-domain` there), and (c) that these fields are **blank guesses
+     they must fill before continuing**: `http.basePath` / `http.gatewayPrefix`
+     (and `http.hostMap` for frontends, `mq.topics` for config-sourced topics —
+     see `$SKILL_DIR/manifest.example.json`). Then **STOP and ask the user to
+     review/edit the file and confirm.** Only once they confirm, re-run the skill
+     (or continue from Phase 1) using the now-confirmed `$MANIFEST`.
+
+   The scan defaults to the current directory (depth 4). If the user's services
+   live in sibling repos, they can re-run with a manifest path argument or point
+   the generator at the right root.
 
 3. **Set up the output workspace** under the manifest's directory:
    ```bash

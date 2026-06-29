@@ -200,6 +200,7 @@
 skills/understand-link/
   SKILL.md
   manifest.schema.json            # 服务清单 schema（serviceId, repo路径, graphRef, domainRef, 网关前缀/基路径, 协议开关, registry.backend）
+  generate-manifest.mjs           # Phase 0：manifest 缺失时扫描已分析服务（*/.understand-anything/kg.json）起草草稿 → 用户确认后再跑
   check-readiness.mjs             # 阶段0：校验 manifest 内每个服务的 kg.json/domain-graph.json 是否就绪，缺失→报错提示去补
   extract-boundaries.mjs          # Phase A 调度：对"就绪且变更"的服务跑各协议提取器 → boundaries/<svc>.json
   extractors/                     # ★ 按协议插件化（新栈只需加一个文件）
