@@ -212,10 +212,12 @@ skills/understand-link/
   resolve-cross-edges.mjs         # Phase B：(kind,key) 哈希 join → cross_edge + unresolved（无 LLM）
   assemble-system-graph.mjs       # 组装 system-graph.json（服务/域节点 + 调用边 + flow 骨架）
   validate-system-graph.mjs       # 校验：悬空键、unresolved 统计、环、孤儿服务
-  agents/                         # v0.1 不启用；v0.2+ 兜模糊残差
-    boundary-extractor.md         #   可选：raw-URL/常量 topic 的 LLM 补
-    flow-namer.md                 #   可选：业务流命名/排序
+  prepare-residual.mjs            # v0.3 Phase 4c-1：确定性预筛——每条 unresolved 给同协议候选小集
+  merge-residual.mjs              # v0.3 Phase 4c-3：校验 agent 选择并折成 via:"llm" 边（置信封顶）
+  flow-namer.md                   #   可选（未做）：业务流命名/排序
 ```
+> residual-matcher agent 落在插件顶层 `agents/residual-matcher.md`（自动发现、可作
+> `understand-anything:residual-matcher` 派发），即 Phase 4c-2 的"从候选里挑一个"。
 - **提取器按协议插件化**：每个 `extractors/<proto>.mjs` 实现统一接口 `extract(serviceCtx) → {provides[], consumes[]}`。③ 的"其它服务用了别的栈（Feign/gRPC/别的 MQ 封装）"只需新增一个插件，不改主流程。
 - **registry 抽象后端**：`json-store` / `sqlite-store` 实现同一 `upsert/query/join` 接口，⑤ 切换零侵入。
 - 重活（就绪校验、边界提取、join、组装、校验）全是**确定性 Node 脚本**，v0.1 **零 LLM**；agent v0.2+ 才接入兜残差。
@@ -268,5 +270,5 @@ skills/understand-link/
   manifest + 就绪校验（缺 kg/domain 即跳过提示）→ **Dubbo 边界**（核心）+ **HTTP Provider 路由** → JSON registry → `(kind,key)` join → 系统图（服务/域节点 + 跨服务调用边**带 domain 标签** + flow 骨架）→ 校验 + unresolved 报告。可增量。
   **即交付 R1 的主干（调用框架 × 业务领域已在同一条边上交叉）+ R2 + R3。** 因 `domain-graph.json` 为硬前置，领域归属是确定性的，故 v0.1 即纳入（不再单列 v0.2）。
 - **v0.2（提取器补全）**：MQ 适配器（确认 topic 来源后）；fe→backend HTTP Consumer 适配器；增量 diff 报告（新增/消失的跨服务边）。
-- **v0.3（残差与规模化）**：raw-URL/topic 模糊残差的 LLM 兜底（按需开）；SQLite registry 后端；200+ 真实服务实测与性能调优。
+- **v0.3（残差与规模化）✅ 已落地**：raw-URL/topic 模糊残差的 LLM 兜底（**按需开**，`--llm-residual`：`prepare-residual` 确定性预筛候选 → `residual-matcher` agent 从候选小集里挑一个或弃选 → `merge-residual` 校验后折成 `via:"llm"` 边，置信度封顶在确定性层之下）；SQLite registry 后端（`node:sqlite`，与 JSON 同 join 结果）。200+ 真实服务实测与性能调优仍待真实环境。
 - **v1（消费）**：dashboard 总览视图 + 跨图下钻；agent MCP 查询工具。

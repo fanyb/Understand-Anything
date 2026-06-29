@@ -1,7 +1,7 @@
 ---
 name: understand-link
 description: Link multiple services' knowledge/domain graphs into one federated system graph — cross-service Dubbo/HTTP calls plus business-domain attribution, with stable keys back to each subgraph. Use when you have several /understand'd repos and need the system-level "who calls whom across services" view.
-argument-hint: ["[manifest-path] [--changed]"]
+argument-hint: ["[manifest-path] [--changed] [--llm-residual]"]
 ---
 
 # /understand-link
@@ -15,7 +15,7 @@ This skill **consumes** the output of `/understand` and `/understand-domain` —
 never re-analyzes a service. See `DESIGN.md` (next to this file) for the full
 rationale (federated two-tier + boundary registry, DESIGN.md §4).
 
-## Scope (v0.2 — deterministic, zero LLM)
+## Scope (v0.3 — deterministic core; optional small LLM residual)
 
 - **Extractors:**
   - **Dubbo** — `@DubboService`+`implements` (provider) / `@DubboReference` (consumer).
@@ -35,10 +35,18 @@ rationale (federated two-tier + boundary registry, DESIGN.md §4).
 - **Registry backend** — `json` (default, git-diffable) or `sqlite` (real
   `node:sqlite` file for scale / SQL access), selected by manifest
   `registry.backend`. Both yield identical cross-edges (DESIGN.md §5.2).
-- **Deferred (by design, DESIGN.md §14):** LLM residual matching (raw-URL /
-  config-sourced topics) → v0.3; dashboard cross-graph drill-down + agent MCP → v1.
+- **LLM residual (opt-in, `--llm-residual`)** — Phase 4c. A deterministic pre-pass
+  shortlists, per unresolved consume, the few same-protocol provider keys that are
+  plausibly the same endpoint/topic; the `residual-matcher` agent picks at most one
+  per entry (or declines). Confirmed picks fold in as `via: "llm"` edges (confidence
+  capped below the deterministic tier). The LLM only ever sees a handful of
+  candidates per entry, never the registry — so cost stays flat at 200+ services
+  (R6). Off by default; the core join is unchanged (DESIGN.md §6/§14).
+- **Deferred (by design, DESIGN.md §14):** dashboard cross-graph drill-down +
+  agent MCP → v1.
 
-All phases are deterministic Node scripts — no subagents, no LLM.
+Every phase except the opt-in Phase 4c is a deterministic Node script with no
+subagents and no LLM.
 
 ## Options
 
@@ -47,6 +55,9 @@ All phases are deterministic Node scripts — no subagents, no LLM.
   `understand-link.manifest.json` then `manifest.json` in the current directory.
 - `--changed` — incremental: re-extract only services whose source hash changed
   (DESIGN.md §8). Other phases are cheap and always re-run.
+- `--llm-residual` — run the opt-in LLM residual pass (Phase 4c) after the
+  deterministic join. Off by default. Adds one `residual-matcher` agent dispatch
+  over a small, pre-filtered candidate shortlist.
 
 The **manifest is the single entry point** (DESIGN.md §13 decision ①). It is
 hand-maintained — see `manifest.schema.json` and `manifest.example.json` in this
@@ -165,6 +176,46 @@ PREV="$LINK_DIR/intermediate/cross-edges.prev.json"
   "$PREV" "$LINK_DIR/intermediate/cross-edges.json" "$LINK_DIR/intermediate/cross-edges.diff.json"
 ```
 
+## Phase 4c — LLM residual matching (opt-in; only with `--llm-residual`)
+
+Skip this whole phase unless the user passed `--llm-residual`. The deterministic
+join (Phase 4) already matched every exact call; this rescues the few non-exact
+real calls hiding in `unresolved` (raw URLs, path variables, config-sourced
+topics), at flat LLM cost — the agent only ever sees a small candidate shortlist.
+
+**Step 1 — Shortlist (deterministic).** For each unresolved consume, shortlist the
+few same-protocol provider keys that are plausibly the same endpoint/topic.
+
+```bash
+node "$SKILL_DIR/prepare-residual.mjs" \
+  "$REGISTRY" "$LINK_DIR/intermediate/cross-edges.json" \
+  "$LINK_DIR/intermediate/residual-candidates.json" --backend="$BACKEND"
+```
+
+If `residual-candidates.json` has `stats.emitted == 0`, there is nothing to match
+— **skip steps 2–3** and proceed to Phase 5 with the deterministic result.
+
+**Step 2 — Pick (one agent).** Dispatch the `residual-matcher` agent
+(`understand-anything:residual-matcher`). Pass it, with **absolute paths**:
+- the input shortlist `$LINK_DIR/intermediate/residual-candidates.json`;
+- the output path `$LINK_DIR/intermediate/residual-matches.json`.
+
+The agent picks at most one candidate per entry (or `null`) and writes
+`residual-matches.json`. It only chooses from the shortlist — it never scans the
+registry.
+
+**Step 3 — Merge (deterministic).** Validate each pick against the registry and
+fold the confirmed ones into the cross-edges as `via: "llm"` edges (confidence
+capped below the deterministic tier; matched consumes leave `unresolved`). This
+overwrites `cross-edges.json` so Phases 5–6 pick up the enriched result.
+
+```bash
+node "$SKILL_DIR/merge-residual.mjs" \
+  "$REGISTRY" "$LINK_DIR/intermediate/cross-edges.json" \
+  "$LINK_DIR/intermediate/residual-matches.json" \
+  "$LINK_DIR/intermediate/cross-edges.json" --backend="$BACKEND"
+```
+
 ## Phase 5 — Assemble the system graph (DESIGN.md §11.5)
 
 ```bash
@@ -188,6 +239,8 @@ informational.
 
 Summarize for the user from `validation-report.json` and `system-graph.json`:
 - services linked / skipped, cross-service edges by protocol, flows per domain;
+- if `--llm-residual` ran, how many edges are `via: "llm"` (lower-confidence,
+  LLM-rescued) vs. deterministic;
 - the `unresolved` list (likely external / unmanaged services);
 - where the output is: `$LINK_DIR/system-graph.json`.
 
