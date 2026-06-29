@@ -107,7 +107,7 @@ Understand Anything 是一个 [Claude Code Plugin](https://code.claude.com/docs/
 /understand-domain --language zh
 
 # 关联多个服务为系统级图（先对每个服务跑过 /understand + /understand-domain）
-/understand-link
+/understand-link                         # 无 manifest 时自动起草草稿并停下让你确认
 /understand-link --llm-residual          # 额外开 LLM 兜模糊残差
 /understand-link ./my.manifest.json --changed   # 指定 manifest + 增量
 
@@ -127,9 +127,12 @@ Understand Anything 是一个 [Claude Code Plugin](https://code.claude.com/docs/
 #### `/understand-link` 用法速记
 
 1. **前置**：每个服务先各自跑过 `/understand --language zh` 与 `/understand-domain --language zh`（该技能只关联现成子图，不重新分析）。
-2. **写 manifest**：在几个仓库的父目录放 `understand-link.manifest.json`，照 `understand-anything-plugin/skills/understand-link/manifest.example.json` 改——给每个服务的 `serviceId / root / graphRef / domainRef`、HTTP 网关前缀（`http.basePath`）、fe 的 `http.hostMap`、MQ 的 `mq.topics`（真实 topic 值源码里没有，需手填）。
-3. **运行**：在 manifest 所在目录输 `/understand-link`。产物在 `.understand-link/system-graph.json`（系统级图）与 `.understand-link/validation-report.json`（含 unresolved / 环 / 孤儿服务）。
-4. **registry 后端**：manifest 里 `registry.backend` 选 `json`（默认，可 git diff）或 `sqlite`（`node:sqlite`，便于规模化 / SQL 查询），两者跨服务边一致。
+2. **拿到 manifest**（二选一）：
+   - **自动生成（推荐）**：直接在几个仓库的父目录输 `/understand-link`。**找不到 manifest 时它会自动扫描当前目录（递归限深 4），把所有已分析的服务（带 `.understand-anything/knowledge-graph.json` 的目录）起草成一份 `understand-link.manifest.json` 草稿，然后停下来让你确认**——`serviceId / repo / root / graphRef / domainRef` 已自动填好，缺 `domain-graph.json` 的服务会被点名（去补 `/understand-domain`）。
+   - **手写**：照 `understand-anything-plugin/skills/understand-link/manifest.example.json` 改。
+3. **补齐草稿里推断不出的字段并确认**：HTTP 网关前缀（`http.basePath` / `http.gatewayPrefix`）、fe 的 `http.hostMap`、MQ 的 `mq.topics`（真实 topic 值源码里没有，需手填）——这些自动生成时留空，确认前务必填好。改完保存，再让它继续后续阶段。
+4. **运行**：在 manifest 所在目录输 `/understand-link`。产物在 `.understand-link/system-graph.json`（系统级图）与 `.understand-link/validation-report.json`（含 unresolved / 环 / 孤儿服务）。
+5. **registry 后端**：manifest 里 `registry.backend` 选 `json`（默认，可 git diff）或 `sqlite`（`node:sqlite`，便于规模化 / SQL 查询），两者跨服务边一致。
 
 ---
 
